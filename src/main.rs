@@ -1,5 +1,5 @@
 use axum::{
-    extract::Multipart,
+    extract::{FromRequest, Multipart},
     routing::{get, post},
     Json, Router,
 };
@@ -43,7 +43,7 @@ async fn main() {
     // Build application routes
     let app = Router::new()
         .route("/", get(hello_world))
-        .route("/v1/index", post(index_document));
+        .route("/v1/index", post(index_document_handler));
     info!("Route configuration completed");
 
     // Run the server
@@ -51,7 +51,6 @@ async fn main() {
         Some(addr) => addr,
         None => SocketAddr::from(([0, 0, 0, 0], cli.port)),
     };
-    // let addr = format!("127.0.0.1:{}", cli.port);
     info!("Binding to address: {}", addr);
     let listener = tokio::net::TcpListener::bind(&addr).await.unwrap();
     info!("Server running at http://{}", addr);
@@ -64,6 +63,19 @@ async fn main() {
 async fn hello_world() -> &'static str {
     info!("Received health check request");
     "Hello, World!"
+}
+
+// Document indexing request for JSON input
+#[derive(Debug, Deserialize)]
+struct IndexRequest {
+    documents: Vec<DocumentInput>,
+}
+
+#[derive(Debug, Deserialize)]
+struct DocumentInput {
+    content: String,
+    #[serde(default)]
+    title: Option<String>,
 }
 
 // Document processing result
@@ -80,12 +92,90 @@ struct IndexResponse {
     results: Vec<DocumentResult>,
 }
 
-// Handler for document indexing requests
-async fn index_document(mut multipart: Multipart) -> Json<IndexResponse> {
-    info!("Received new document indexing request");
+// Main handler that routes to appropriate processing function based on content type
+async fn index_document_handler(
+    content_type: axum::http::header::HeaderMap,
+    request: axum::extract::Request,
+) -> Json<IndexResponse> {
+    let content_type = content_type
+        .get(axum::http::header::CONTENT_TYPE)
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or("");
+
+    info!("Received document indexing request");
+
+    let response = match content_type {
+        t if t.starts_with("multipart/form-data") => {
+            info!("Processing as multipart/form-data");
+            let multipart = match Multipart::from_request(request, &()).await {
+                Ok(m) => m,
+                Err(e) => {
+                    error!(error = %e, "Failed to parse multipart request");
+                    return Json(IndexResponse {
+                        results: vec![DocumentResult {
+                            filename: "unknown".to_string(),
+                            status: "failed".to_string(),
+                            error: Some("Failed to parse multipart request".to_string()),
+                        }],
+                    });
+                }
+            };
+            process_multipart(multipart).await
+        }
+        "application/json" => {
+            info!("Processing as JSON request");
+            let payload = match axum::Json::<IndexRequest>::from_request(request, &()).await {
+                Ok(Json(payload)) => payload,
+                Err(e) => {
+                    error!(error = %e, "Failed to parse JSON request");
+                    return Json(IndexResponse {
+                        results: vec![DocumentResult {
+                            filename: "unknown".to_string(),
+                            status: "failed".to_string(),
+                            error: Some("Failed to parse JSON request".to_string()),
+                        }],
+                    });
+                }
+            };
+            process_json(payload).await
+        }
+        _ => {
+            warn!(content_type = content_type, "Unsupported content type");
+            Json(IndexResponse {
+                results: vec![DocumentResult {
+                    filename: "unknown".to_string(),
+                    status: "failed".to_string(),
+                    error: Some("Unsupported content type".to_string()),
+                }],
+            })
+        }
+    };
+
+    info!(
+        successful = response
+            .results
+            .iter()
+            .filter(|r| r.status == "indexed")
+            .count(),
+        failed = response
+            .results
+            .iter()
+            .filter(|r| r.status == "failed")
+            .count(),
+        "Request processing completed"
+    );
+
+    response
+}
+
+// Process multipart form data
+async fn process_multipart(mut multipart: Multipart) -> Json<IndexResponse> {
+    info!("Starting multipart form data processing");
     let mut results = Vec::new();
+    let mut field_count = 0;
 
     while let Ok(Some(field)) = multipart.next_field().await {
+        field_count += 1;
         let filename = field
             .file_name()
             .map(ToString::to_string)
@@ -96,13 +186,19 @@ async fn index_document(mut multipart: Multipart) -> Json<IndexResponse> {
             .map(|ct| ct.to_string())
             .unwrap_or_else(|| "application/octet-stream".to_string());
 
-        info!("Processing file: {}, type: {}", filename, content_type);
+        info!(
+            field_number = field_count,
+            filename = %filename,
+            content_type = %content_type,
+            "Processing field"
+        );
 
-        // Validate file type
         if !is_valid_content_type(&content_type) {
             warn!(
-                "Unsupported file type: {}, file: {}",
-                content_type, filename
+                field_number = field_count,
+                filename = %filename,
+                content_type = %content_type,
+                "Unsupported file type"
             );
             results.push(DocumentResult {
                 filename,
@@ -114,18 +210,94 @@ async fn index_document(mut multipart: Multipart) -> Json<IndexResponse> {
             continue;
         }
 
-        // Read file content
-        match field.bytes().await {
-            Ok(bytes) => {
+        process_field_content(&mut results, field, filename).await;
+    }
+
+    info!(
+        total_fields = field_count,
+        successful = results.iter().filter(|r| r.status == "indexed").count(),
+        failed = results.iter().filter(|r| r.status == "failed").count(),
+        "Multipart processing completed"
+    );
+
+    Json(IndexResponse { results })
+}
+
+// Process JSON input
+async fn process_json(request: IndexRequest) -> Json<IndexResponse> {
+    info!(
+        document_count = request.documents.len(),
+        "Starting JSON request processing"
+    );
+    let mut results = Vec::new();
+
+    for (index, doc) in request.documents.into_iter().enumerate() {
+        let filename = doc.title.unwrap_or_else(|| "unnamed_document".to_string());
+        info!(
+            document_number = index + 1,
+            filename = %filename,
+            "Processing document"
+        );
+
+        match process_content(&doc.content) {
+            Ok(_) => {
                 info!(
-                    "Successfully read file: {}, size: {} bytes",
-                    filename,
-                    bytes.len()
+                    document_number = index + 1,
+                    filename = %filename,
+                    "Document processed successfully"
                 );
-                match String::from_utf8(bytes.to_vec()) {
-                    Ok(content) => {
-                        // Add actual document processing logic here
-                        info!("Successfully parsed file content: {}", filename);
+                results.push(DocumentResult {
+                    filename,
+                    status: "indexed".to_string(),
+                    error: None,
+                });
+            }
+            Err(e) => {
+                error!(
+                    document_number = index + 1,
+                    filename = %filename,
+                    error = %e,
+                    "Document processing failed"
+                );
+                results.push(DocumentResult {
+                    filename,
+                    status: "failed".to_string(),
+                    error: Some(e.to_string()),
+                });
+            }
+        }
+    }
+
+    info!(
+        total_documents = results.len(),
+        successful = results.iter().filter(|r| r.status == "indexed").count(),
+        failed = results.iter().filter(|r| r.status == "failed").count(),
+        "JSON processing completed"
+    );
+
+    Json(IndexResponse { results })
+}
+
+// Helper function to process field content
+async fn process_field_content(
+    results: &mut Vec<DocumentResult>,
+    field: axum::extract::multipart::Field<'_>,
+    filename: String,
+) {
+    match field.bytes().await {
+        Ok(bytes) => {
+            info!(
+                filename = %filename,
+                size_bytes = bytes.len(),
+                "Field content read successfully"
+            );
+            match String::from_utf8(bytes.to_vec()) {
+                Ok(content) => match process_content(&content) {
+                    Ok(_) => {
+                        info!(
+                            filename = %filename,
+                            "Content processed successfully"
+                        );
                         results.push(DocumentResult {
                             filename,
                             status: "indexed".to_string(),
@@ -133,31 +305,55 @@ async fn index_document(mut multipart: Multipart) -> Json<IndexResponse> {
                         });
                     }
                     Err(e) => {
-                        error!("File content encoding error: {}, error: {}", filename, e);
+                        error!(
+                            filename = %filename,
+                            error = %e,
+                            "Content processing failed"
+                        );
                         results.push(DocumentResult {
                             filename,
                             status: "failed".to_string(),
-                            error: Some("Invalid UTF-8 content".to_string()),
+                            error: Some(e.to_string()),
                         });
                     }
+                },
+                Err(e) => {
+                    error!(
+                        filename = %filename,
+                        error = %e,
+                        "UTF-8 decoding failed"
+                    );
+                    results.push(DocumentResult {
+                        filename,
+                        status: "failed".to_string(),
+                        error: Some("Invalid UTF-8 content".to_string()),
+                    });
                 }
             }
-            Err(e) => {
-                error!("Failed to read file: {}, error: {}", filename, e);
-                results.push(DocumentResult {
-                    filename,
-                    status: "failed".to_string(),
-                    error: Some(format!("Failed to read file: {}", e)),
-                });
-            }
+        }
+        Err(e) => {
+            error!(
+                filename = %filename,
+                error = %e,
+                "Failed to read field content"
+            );
+            results.push(DocumentResult {
+                filename,
+                status: "failed".to_string(),
+                error: Some(format!("Failed to read file: {}", e)),
+            });
         }
     }
+}
 
-    info!(
-        "Document indexing request completed, processed {} files",
-        results.len()
-    );
-    Json(IndexResponse { results })
+// Process document content
+fn process_content(content: &str) -> Result<(), String> {
+    // Add actual document processing logic here
+    // For now, just validate that content is not empty
+    if content.trim().is_empty() {
+        return Err("Empty content is not allowed".to_string());
+    }
+    Ok(())
 }
 
 // Validate content type
