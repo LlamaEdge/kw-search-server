@@ -15,7 +15,7 @@ const DEFAULT_PORT: &str = "9069";
 #[derive(Debug, Parser)]
 #[command(name = "Keyword Search Server", version = env!("CARGO_PKG_VERSION"), author = env!("CARGO_PKG_AUTHORS"), about = "Keyword Search Server")]
 #[command(group = ArgGroup::new("socket_address_group").multiple(false).args(&["socket_addr", "port"]))]
-struct Args {
+struct Cli {
     /// Socket address of llama-proxy-server instance. For example, `0.0.0.0:9069`.
     #[arg(long, default_value = None, value_parser = clap::value_parser!(SocketAddr), group = "socket_address_group")]
     socket_addr: Option<SocketAddr>,
@@ -37,7 +37,7 @@ async fn main() {
         .init();
 
     // Parse command line arguments
-    let args = Args::parse();
+    let cli = Cli::parse();
     info!("Server starting, command line arguments parsed");
 
     // Build application routes
@@ -47,7 +47,11 @@ async fn main() {
     info!("Route configuration completed");
 
     // Run the server
-    let addr = format!("127.0.0.1:{}", args.port);
+    let addr = match cli.socket_addr {
+        Some(addr) => addr,
+        None => SocketAddr::from(([0, 0, 0, 0], cli.port)),
+    };
+    // let addr = format!("127.0.0.1:{}", cli.port);
     info!("Binding to address: {}", addr);
     let listener = tokio::net::TcpListener::bind(&addr).await.unwrap();
     info!("Server running at http://{}", addr);
