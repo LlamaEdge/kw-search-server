@@ -10,7 +10,7 @@ use tantivy::{
     collector::TopDocs, doc, query::QueryParser, schema::*, Index, IndexWriter, ReloadPolicy,
 };
 use tempfile::TempDir;
-use tracing::{error, info, warn, Level};
+use tracing::{debug, error, info, warn, Level};
 
 // default port of Keyword Search Server
 const DEFAULT_PORT: &str = "9069";
@@ -227,48 +227,129 @@ async fn process_multipart(mut multipart: Multipart) -> Json<IndexResponse> {
         total_fields = field_count,
         successful = results.iter().filter(|r| r.status == "indexed").count(),
         failed = results.iter().filter(|r| r.status == "failed").count(),
-        "Multipart processing completed"
+        "Field processing completed"
     );
 
-    // create a temporary directory for saving the index
+    // Create index directory
+    info!("Starting index creation");
     let index_path = TempDir::new().unwrap();
     let index_name = format!("index-{}", uuid::Uuid::new_v4());
     let index_path = index_path.path().join(&index_name);
+    debug!(path = %index_path.display(), "Created temporary index directory");
+
     if !index_path.exists() {
+        debug!(path = %index_path.display(), "Creating index directory");
         std::fs::create_dir_all(&index_path).unwrap();
     }
 
-    // define a schema
+    // Define schema
+    info!("Defining index schema");
     let mut schema_builder = Schema::builder();
     let title = schema_builder.add_text_field("title", TEXT | STORED);
     let body = schema_builder.add_text_field("body", TEXT);
     let schema = schema_builder.build();
 
-    // create a brand new index. This will actually just save a meta.json
-    // with our schema in the directory.
-    let index = Index::create_in_dir(&index_path, schema.clone()).unwrap();
+    // Create index
+    info!("Creating new index");
+    let index = match Index::create_in_dir(&index_path, schema.clone()) {
+        Ok(index) => index,
+        Err(e) => {
+            error!(error = %e, "Failed to create index");
+            return Json(IndexResponse {
+                results,
+                index_path: None,
+            });
+        }
+    };
 
-    // create a buffer of 100MB that will be split between indexing threads.
-    let mut index_writer: IndexWriter = index.writer(100_000_000).unwrap();
+    // Create index writer
+    info!("Initializing index writer");
+    let mut index_writer = match index.writer(100_000_000) {
+        Ok(writer) => writer,
+        Err(e) => {
+            error!(error = %e, "Failed to create index writer");
+            return Json(IndexResponse {
+                results,
+                index_path: None,
+            });
+        }
+    };
 
-    // add the documents to the index
-    for document in documents {
+    // Add documents to index
+    info!(
+        document_count = documents.len(),
+        "Starting document indexing"
+    );
+    for (i, document) in documents.iter().enumerate() {
         let doc = doc!(
             title => document.title.clone().unwrap_or("Unknown".to_string()),
-            body => document.content,
+            body => document.content.clone(),
         );
-        index_writer.add_document(doc).unwrap();
+        if let Err(e) = index_writer.add_document(doc) {
+            error!(
+                document_number = i + 1,
+                error = %e,
+                "Failed to add document to index"
+            );
+            continue;
+        }
+        info!(
+            document_number = i + 1,
+            total = documents.len(),
+            "Document added to index"
+        );
     }
 
-    // commit the index
-    index_writer.commit().unwrap();
+    // Commit index
+    info!("Committing index");
+    if let Err(e) = index_writer.commit() {
+        error!(error = %e, "Failed to commit index");
+        return Json(IndexResponse {
+            results,
+            index_path: None,
+        });
+    }
 
-    // compress the index
+    // Compress index
+    info!("Starting index compression");
     let compressed_filename = format!("{}.tar.gz", index_name);
     let compressed_index_path = std::env::current_dir().unwrap().join(&compressed_filename);
-    let mut builder = tar::Builder::new(File::create(&compressed_index_path).unwrap());
-    builder.append_dir_all(".", &index_path).unwrap();
-    builder.finish().unwrap();
+
+    let file = match File::create(&compressed_index_path) {
+        Ok(file) => file,
+        Err(e) => {
+            error!(
+                path = %compressed_index_path.display(),
+                error = %e,
+                "Failed to create compressed index file"
+            );
+            return Json(IndexResponse {
+                results,
+                index_path: None,
+            });
+        }
+    };
+
+    let mut builder = tar::Builder::new(file);
+    if let Err(e) = builder.append_dir_all(".", &index_path) {
+        error!(error = %e, "Failed to compress index directory");
+        return Json(IndexResponse {
+            results,
+            index_path: None,
+        });
+    }
+    if let Err(e) = builder.finish() {
+        error!(error = %e, "Failed to finalize index compression");
+        return Json(IndexResponse {
+            results,
+            index_path: None,
+        });
+    }
+
+    info!(
+        path = %compressed_index_path.display(),
+        "Index compression completed"
+    );
 
     Json(IndexResponse {
         results,
@@ -285,11 +366,7 @@ async fn process_field_content(
 ) {
     match field.bytes().await {
         Ok(bytes) => {
-            info!(
-                filename = %filename,
-                size_bytes = bytes.len(),
-                "Field content read successfully"
-            );
+            info!(size_bytes = bytes.len(), "Content read successfully");
             match String::from_utf8(bytes.to_vec()) {
                 Ok(content) => {
                     let document = DocumentInput {
@@ -300,10 +377,7 @@ async fn process_field_content(
 
                     match process_content(&content) {
                         Ok(_) => {
-                            info!(
-                                filename = %filename,
-                                "Content processed successfully"
-                            );
+                            info!("Content processed successfully");
                             results.push(DocumentResult {
                                 filename,
                                 status: "indexed".to_string(),
@@ -361,48 +435,91 @@ async fn process_json(request: IndexRequest) -> Json<IndexResponse> {
     );
     let mut results = Vec::new();
 
-    // create a temporary directory for saving the index
+    // Create index directory
+    info!("Starting index creation");
     let index_path = TempDir::new().unwrap();
     let index_name = format!("index-{}", uuid::Uuid::new_v4());
     let index_path = index_path.path().join(&index_name);
+    debug!(path = %index_path.display(), "Created temporary index directory");
+
     if !index_path.exists() {
+        debug!(path = %index_path.display(), "Creating index directory");
         std::fs::create_dir_all(&index_path).unwrap();
     }
 
-    // define a schema
+    // Define schema
+    info!("Defining index schema");
     let mut schema_builder = Schema::builder();
     let title = schema_builder.add_text_field("title", TEXT | STORED);
     let body = schema_builder.add_text_field("body", TEXT);
     let schema = schema_builder.build();
 
-    // create a brand new index. This will actually just save a meta.json
-    // with our schema in the directory.
-    let index = Index::create_in_dir(&index_path, schema.clone()).unwrap();
+    // Create index
+    info!("Creating new index");
+    let index = match Index::create_in_dir(&index_path, schema.clone()) {
+        Ok(index) => index,
+        Err(e) => {
+            error!(error = %e, "Failed to create index");
+            return Json(IndexResponse {
+                results,
+                index_path: None,
+            });
+        }
+    };
 
-    // create a buffer of 100MB that will be split between indexing threads.
-    let mut index_writer: IndexWriter = index.writer(100_000_000).unwrap();
+    // Create index writer
+    info!("Initializing index writer");
+    let mut index_writer = match index.writer(100_000_000) {
+        Ok(writer) => writer,
+        Err(e) => {
+            error!(error = %e, "Failed to create index writer");
+            return Json(IndexResponse {
+                results,
+                index_path: None,
+            });
+        }
+    };
 
+    // Process and index documents
+    let total = request.documents.len();
     for (index, document) in request.documents.into_iter().enumerate() {
+        let filename = document
+            .title
+            .clone()
+            .unwrap_or_else(|| "Unknown".to_string());
+        info!(
+            document_number = index + 1,
+            total = total,
+            filename = %filename,
+            content_length = document.content.len(),
+            "Processing document"
+        );
+
+        // Add document to index
         let doc = doc!(
             title => document.title.clone().unwrap_or("Unknown".to_string()),
             body => document.content.clone(),
         );
-        index_writer.add_document(doc).unwrap();
 
-        let filename = document.title.unwrap_or_else(|| "Unknown".to_string());
-        info!(
-            document_number = index + 1,
-            filename = %filename,
-            "Processing document"
-        );
+        if let Err(e) = index_writer.add_document(doc) {
+            error!(
+                document_number = index + 1,
+                filename = %filename,
+                error = %e,
+                "Failed to add document to index"
+            );
+            results.push(DocumentResult {
+                filename,
+                status: "failed".to_string(),
+                error: Some(format!("Failed to add to index: {}", e)),
+            });
+            continue;
+        }
 
+        // Process content
         match process_content(&document.content) {
             Ok(_) => {
-                info!(
-                    document_number = index + 1,
-                    filename = %filename,
-                    "Document processed successfully"
-                );
+                info!("Document processed successfully");
                 results.push(DocumentResult {
                     filename,
                     status: "indexed".to_string(),
@@ -425,15 +542,56 @@ async fn process_json(request: IndexRequest) -> Json<IndexResponse> {
         }
     }
 
-    // commit the index
-    index_writer.commit().unwrap();
+    // Commit index
+    info!("Committing index");
+    if let Err(e) = index_writer.commit() {
+        error!(error = %e, "Failed to commit index");
+        return Json(IndexResponse {
+            results,
+            index_path: None,
+        });
+    }
 
-    // compress the index
+    // Compress index
+    info!("Starting index compression");
     let compressed_filename = format!("{}.tar.gz", index_name);
     let compressed_index_path = std::env::current_dir().unwrap().join(&compressed_filename);
-    let mut builder = tar::Builder::new(File::create(&compressed_index_path).unwrap());
-    builder.append_dir_all(".", &index_path).unwrap();
-    builder.finish().unwrap();
+
+    let file = match File::create(&compressed_index_path) {
+        Ok(file) => file,
+        Err(e) => {
+            error!(
+                path = %compressed_index_path.display(),
+                error = %e,
+                "Failed to create compressed index file"
+            );
+            return Json(IndexResponse {
+                results,
+                index_path: None,
+            });
+        }
+    };
+
+    let mut builder = tar::Builder::new(file);
+    if let Err(e) = builder.append_dir_all(".", &index_path) {
+        error!(error = %e, "Failed to compress index directory");
+        return Json(IndexResponse {
+            results,
+            index_path: None,
+        });
+    }
+    if let Err(e) = builder.finish() {
+        error!(error = %e, "Failed to finalize index compression");
+        return Json(IndexResponse {
+            results,
+            index_path: None,
+        });
+    }
+
+    info!(
+        path = %compressed_index_path.display(),
+        "Index compression completed"
+    );
 
     info!(
         total_documents = results.len(),
