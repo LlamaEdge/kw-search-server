@@ -5,7 +5,11 @@ use axum::{
 };
 use clap::{ArgGroup, Parser};
 use serde::{Deserialize, Serialize};
-use std::{net::SocketAddr, path::PathBuf};
+use std::{fs::File, net::SocketAddr, path::PathBuf};
+use tantivy::{
+    collector::TopDocs, doc, query::QueryParser, schema::*, Index, IndexWriter, ReloadPolicy,
+};
+use tempfile::TempDir;
 use tracing::{error, info, warn, Level};
 
 // default port of Keyword Search Server
@@ -71,10 +75,10 @@ struct IndexRequest {
     documents: Vec<DocumentInput>,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Clone, Deserialize)]
 struct DocumentInput {
     content: String,
-    #[serde(default)]
+    #[serde(skip_serializing_if = "Option::is_none")]
     title: Option<String>,
 }
 
@@ -90,6 +94,8 @@ struct DocumentResult {
 #[derive(Debug, Serialize)]
 struct IndexResponse {
     results: Vec<DocumentResult>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    index_path: Option<String>,
 }
 
 // Main handler that routes to appropriate processing function based on content type
@@ -117,6 +123,7 @@ async fn index_document_handler(
                             status: "failed".to_string(),
                             error: Some("Failed to parse multipart request".to_string()),
                         }],
+                        index_path: None,
                     });
                 }
             };
@@ -134,6 +141,7 @@ async fn index_document_handler(
                             status: "failed".to_string(),
                             error: Some("Failed to parse JSON request".to_string()),
                         }],
+                        index_path: None,
                     });
                 }
             };
@@ -147,6 +155,7 @@ async fn index_document_handler(
                     status: "failed".to_string(),
                     error: Some("Unsupported content type".to_string()),
                 }],
+                index_path: None,
             })
         }
     };
@@ -173,6 +182,7 @@ async fn process_multipart(mut multipart: Multipart) -> Json<IndexResponse> {
     info!("Starting multipart form data processing");
     let mut results = Vec::new();
     let mut field_count = 0;
+    let mut documents = Vec::new();
 
     while let Ok(Some(field)) = multipart.next_field().await {
         field_count += 1;
@@ -210,7 +220,7 @@ async fn process_multipart(mut multipart: Multipart) -> Json<IndexResponse> {
             continue;
         }
 
-        process_field_content(&mut results, field, filename).await;
+        process_field_content(&mut results, &mut documents, field, filename).await;
     }
 
     info!(
@@ -220,7 +230,127 @@ async fn process_multipart(mut multipart: Multipart) -> Json<IndexResponse> {
         "Multipart processing completed"
     );
 
-    Json(IndexResponse { results })
+    // create a temporary directory for saving the index
+    let index_path = TempDir::new().unwrap();
+    let index_name = format!("index-{}", uuid::Uuid::new_v4());
+    let index_path = index_path.path().join(&index_name);
+    if !index_path.exists() {
+        std::fs::create_dir_all(&index_path).unwrap();
+    }
+
+    // define a schema
+    let mut schema_builder = Schema::builder();
+    let title = schema_builder.add_text_field("title", TEXT | STORED);
+    let body = schema_builder.add_text_field("body", TEXT);
+    let schema = schema_builder.build();
+
+    // create a brand new index. This will actually just save a meta.json
+    // with our schema in the directory.
+    let index = Index::create_in_dir(&index_path, schema.clone()).unwrap();
+
+    // create a buffer of 100MB that will be split between indexing threads.
+    let mut index_writer: IndexWriter = index.writer(100_000_000).unwrap();
+
+    // add the documents to the index
+    for document in documents {
+        let doc = doc!(
+            title => document.title.clone().unwrap_or("Unknown".to_string()),
+            body => document.content,
+        );
+        index_writer.add_document(doc).unwrap();
+    }
+
+    // commit the index
+    index_writer.commit().unwrap();
+
+    // compress the index
+    let compressed_filename = format!("{}.tar.gz", index_name);
+    let compressed_index_path = std::env::current_dir().unwrap().join(&compressed_filename);
+    let mut builder = tar::Builder::new(File::create(&compressed_index_path).unwrap());
+    builder.append_dir_all(".", &index_path).unwrap();
+    builder.finish().unwrap();
+
+    Json(IndexResponse {
+        results,
+        index_path: Some(compressed_index_path.to_string_lossy().to_string()),
+    })
+}
+
+// Helper function to process field content
+async fn process_field_content(
+    results: &mut Vec<DocumentResult>,
+    documents: &mut Vec<DocumentInput>,
+    field: axum::extract::multipart::Field<'_>,
+    filename: String,
+) {
+    match field.bytes().await {
+        Ok(bytes) => {
+            info!(
+                filename = %filename,
+                size_bytes = bytes.len(),
+                "Field content read successfully"
+            );
+            match String::from_utf8(bytes.to_vec()) {
+                Ok(content) => {
+                    let document = DocumentInput {
+                        content: content.clone(),
+                        title: None,
+                    };
+                    documents.push(document);
+
+                    match process_content(&content) {
+                        Ok(_) => {
+                            info!(
+                                filename = %filename,
+                                "Content processed successfully"
+                            );
+                            results.push(DocumentResult {
+                                filename,
+                                status: "indexed".to_string(),
+                                error: None,
+                            });
+                        }
+                        Err(e) => {
+                            error!(
+                                filename = %filename,
+                                error = %e,
+                                "Content processing failed"
+                            );
+                            results.push(DocumentResult {
+                                filename,
+                                status: "failed".to_string(),
+                                error: Some(e.to_string()),
+                            });
+                        }
+                    }
+                }
+                Err(e) => {
+                    error!(
+                        filename = %filename,
+                        error = %e,
+                        "UTF-8 decoding failed"
+                    );
+                    results.push(DocumentResult {
+                        filename,
+                        status: "failed".to_string(),
+                        error: Some("Invalid UTF-8 content".to_string()),
+                    });
+                }
+            }
+        }
+        Err(e) => {
+            error!(
+                filename = %filename,
+                error = %e,
+                "Failed to read field content"
+            );
+            results.push(DocumentResult {
+                filename,
+                status: "failed".to_string(),
+                error: Some(format!("Failed to read file: {}", e)),
+            });
+        }
+    }
 }
 
 // Process JSON input
@@ -231,15 +361,42 @@ async fn process_json(request: IndexRequest) -> Json<IndexResponse> {
     );
     let mut results = Vec::new();
 
-    for (index, doc) in request.documents.into_iter().enumerate() {
-        let filename = doc.title.unwrap_or_else(|| "unnamed_document".to_string());
+    // create a temporary directory for saving the index
+    let index_path = TempDir::new().unwrap();
+    let index_name = format!("index-{}", uuid::Uuid::new_v4());
+    let index_path = index_path.path().join(&index_name);
+    if !index_path.exists() {
+        std::fs::create_dir_all(&index_path).unwrap();
+    }
+
+    // define a schema
+    let mut schema_builder = Schema::builder();
+    let title = schema_builder.add_text_field("title", TEXT | STORED);
+    let body = schema_builder.add_text_field("body", TEXT);
+    let schema = schema_builder.build();
+
+    // create a brand new index. This will actually just save a meta.json
+    // with our schema in the directory.
+    let index = Index::create_in_dir(&index_path, schema.clone()).unwrap();
+
+    // create a buffer of 100MB that will be split between indexing threads.
+    let mut index_writer: IndexWriter = index.writer(100_000_000).unwrap();
+
+    for (index, document) in request.documents.into_iter().enumerate() {
+        let doc = doc!(
+            title => document.title.clone().unwrap_or("Unknown".to_string()),
+            body => document.content.clone(),
+        );
+        index_writer.add_document(doc).unwrap();
+
+        let filename = document.title.unwrap_or_else(|| "Unknown".to_string());
         info!(
             document_number = index + 1,
             filename = %filename,
             "Processing document"
         );
 
-        match process_content(&doc.content) {
+        match process_content(&document.content) {
             Ok(_) => {
                 info!(
                     document_number = index + 1,
@@ -268,6 +425,16 @@ async fn process_json(request: IndexRequest) -> Json<IndexResponse> {
         }
     }
 
+    // commit the index
+    index_writer.commit().unwrap();
+
+    // compress the index
+    let compressed_filename = format!("{}.tar.gz", index_name);
+    let compressed_index_path = std::env::current_dir().unwrap().join(&compressed_filename);
+    let mut builder = tar::Builder::new(File::create(&compressed_index_path).unwrap());
+    builder.append_dir_all(".", &index_path).unwrap();
+    builder.finish().unwrap();
+
     info!(
         total_documents = results.len(),
         successful = results.iter().filter(|r| r.status == "indexed").count(),
@@ -275,75 +442,10 @@ async fn process_json(request: IndexRequest) -> Json<IndexResponse> {
         "JSON processing completed"
     );
 
-    Json(IndexResponse { results })
-}
-
-// Helper function to process field content
-async fn process_field_content(
-    results: &mut Vec<DocumentResult>,
-    field: axum::extract::multipart::Field<'_>,
-    filename: String,
-) {
-    match field.bytes().await {
-        Ok(bytes) => {
-            info!(
-                filename = %filename,
-                size_bytes = bytes.len(),
-                "Field content read successfully"
-            );
-            match String::from_utf8(bytes.to_vec()) {
-                Ok(content) => match process_content(&content) {
-                    Ok(_) => {
-                        info!(
-                            filename = %filename,
-                            "Content processed successfully"
-                        );
-                        results.push(DocumentResult {
-                            filename,
-                            status: "indexed".to_string(),
-                            error: None,
-                        });
-                    }
-                    Err(e) => {
-                        error!(
-                            filename = %filename,
-                            error = %e,
-                            "Content processing failed"
-                        );
-                        results.push(DocumentResult {
-                            filename,
-                            status: "failed".to_string(),
-                            error: Some(e.to_string()),
-                        });
-                    }
-                },
-                Err(e) => {
-                    error!(
-                        filename = %filename,
-                        error = %e,
-                        "UTF-8 decoding failed"
-                    );
-                    results.push(DocumentResult {
-                        filename,
-                        status: "failed".to_string(),
-                        error: Some("Invalid UTF-8 content".to_string()),
-                    });
-                }
-            }
-        }
-        Err(e) => {
-            error!(
-                filename = %filename,
-                error = %e,
-                "Failed to read field content"
-            );
-            results.push(DocumentResult {
-                filename,
-                status: "failed".to_string(),
-                error: Some(format!("Failed to read file: {}", e)),
-            });
-        }
-    }
+    Json(IndexResponse {
+        results,
+        index_path: Some(compressed_index_path.to_string_lossy().to_string()),
+    })
 }
 
 // Process document content
