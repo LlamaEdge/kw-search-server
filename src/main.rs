@@ -45,9 +45,7 @@ async fn main() {
     info!("Server starting, command line arguments parsed");
 
     // Build application routes
-    let app = Router::new()
-        .route("/", get(hello_world))
-        .route("/v1/index", post(index_document_handler));
+    let app = Router::new().route("/v1/index", post(index_document_handler));
     info!("Route configuration completed");
 
     // Run the server
@@ -61,12 +59,6 @@ async fn main() {
 
     info!("Starting to accept connections...");
     axum::serve(listener, app).await.unwrap();
-}
-
-// Handler for root path
-async fn hello_world() -> &'static str {
-    info!("Received health check request");
-    "Hello, World!"
 }
 
 // Document indexing request for JSON input
