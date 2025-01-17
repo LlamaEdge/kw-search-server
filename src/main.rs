@@ -28,6 +28,33 @@ struct Cli {
     port: u16,
 }
 
+// Add these new structs for query handling
+#[derive(Debug, Clone, Deserialize)]
+struct QueryRequest {
+    query: String,
+    #[serde(default = "default_top_k")]
+    top_k: usize,
+    index: String,
+}
+
+fn default_top_k() -> usize {
+    10
+}
+
+#[derive(Debug, Clone, Serialize)]
+struct QueryResponse {
+    hits: Vec<SearchHit>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    error: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+struct SearchHit {
+    title: String,
+    content: String,
+    score: f32,
+}
+
 #[tokio::main]
 async fn main() {
     // Initialize logging
@@ -45,7 +72,9 @@ async fn main() {
     info!("Server starting, command line arguments parsed");
 
     // Build application routes
-    let app = Router::new().route("/v1/index", post(index_document_handler));
+    let app = Router::new()
+        .route("/v1/index", post(index_document_handler))
+        .route("/v1/search", post(query_handler));
     info!("Route configuration completed");
 
     // Run the server
@@ -443,7 +472,7 @@ async fn process_json(request: IndexRequest) -> Json<IndexResponse> {
     info!("Defining index schema");
     let mut schema_builder = Schema::builder();
     let title = schema_builder.add_text_field("title", TEXT | STORED);
-    let body = schema_builder.add_text_field("body", TEXT);
+    let body = schema_builder.add_text_field("body", TEXT | STORED);
     let schema = schema_builder.build();
 
     // Create index
@@ -614,4 +643,115 @@ fn is_valid_content_type(content_type: &str) -> bool {
         content_type,
         "text/plain" | "text/markdown" | "application/octet-stream" // Sometimes file uploads might not have the correct content-type
     )
+}
+
+// Add the query handler function
+async fn query_handler(Json(request): Json<QueryRequest>) -> Json<QueryResponse> {
+    info!(
+        query = %request.query,
+        top_k = request.top_k,
+        "Received search request"
+    );
+
+    let index_path = std::env::current_dir().unwrap().join(&request.index);
+    if !index_path.exists() {
+        error!(path = %index_path.display(), "Index path does not exist");
+        return Json(QueryResponse {
+            hits: Vec::new(),
+            error: Some("Index path does not exist".to_string()),
+        });
+    }
+
+    info!(path = %index_path.display(), "Opening index");
+    let index = match Index::open_in_dir(&index_path) {
+        Ok(index) => index,
+        Err(e) => {
+            error!(error = %e, "Failed to open index");
+            return Json(QueryResponse {
+                hits: Vec::new(),
+                error: Some(format!("Failed to open index: {}", e)),
+            });
+        }
+    };
+
+    // create reader
+    let reader = index
+        .reader_builder()
+        .reload_policy(ReloadPolicy::OnCommitWithDelay)
+        .try_into()
+        .unwrap();
+
+    // acquire searcher
+    let searcher = reader.searcher();
+
+    // get schema
+    let schema = index.schema();
+
+    // get fields
+    let title = schema.get_field("title").unwrap();
+    let body = schema.get_field("body").unwrap();
+
+    // create query parser
+    let query_parser = QueryParser::for_index(&index, vec![title, body]);
+
+    // parse query
+    let query_str = format!("body:{}", &request.query);
+    let query = match query_parser.parse_query(&query_str) {
+        Ok(q) => q,
+        Err(e) => {
+            error!(error = %e, "Failed to parse query");
+            return Json(QueryResponse {
+                hits: Vec::new(),
+                error: Some(format!("Failed to parse query: {}", e)),
+            });
+        }
+    };
+
+    // execute search
+    info!("Executing search");
+    let top_docs = match searcher.search(&query, &TopDocs::with_limit(request.top_k)) {
+        Ok(docs) => docs,
+        Err(e) => {
+            error!(error = %e, "Search failed");
+            return Json(QueryResponse {
+                hits: Vec::new(),
+                error: Some(format!("Search failed: {}", e)),
+            });
+        }
+    };
+
+    // collect hits
+    let mut hits = Vec::new();
+    for (score, doc_address) in top_docs {
+        let retrieved_doc: TantivyDocument = searcher.doc(doc_address).unwrap();
+
+        let title_value = retrieved_doc
+            .get_first(title)
+            .and_then(|v| v.as_str())
+            .unwrap_or("Unknown")
+            .to_string();
+
+        let body_value = retrieved_doc
+            .get_first(body)
+            .and_then(|v| v.as_str())
+            .unwrap_or("Unknown")
+            .to_string();
+
+        info!(
+            score = score,
+            title = title_value,
+            body = body_value,
+            "Retrieved document"
+        );
+
+        hits.push(SearchHit {
+            title: title_value,
+            content: body_value,
+            score,
+        });
+    }
+
+    info!(hits = hits.len(), "Search completed successfully");
+
+    Json(QueryResponse { hits, error: None })
 }
