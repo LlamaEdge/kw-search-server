@@ -1,27 +1,44 @@
+mod error;
+
 use axum::{
     extract::{FromRequest, Multipart},
     routing::{get, post},
     Json, Router,
 };
 use clap::{ArgGroup, Parser};
+use error::ServerError;
+use once_cell::sync::OnceCell;
 use serde::{Deserialize, Serialize};
-use std::{fs::File, net::SocketAddr, path::PathBuf};
+use std::{
+    fs::File,
+    net::{IpAddr, SocketAddr},
+    path::PathBuf,
+};
 use tantivy::{
     collector::TopDocs, doc, query::QueryParser, schema::*, Index, IndexWriter, ReloadPolicy,
 };
 use tempfile::TempDir;
 use tracing::{debug, error, info, warn, Level};
+use url::Url;
 
 // default port of Keyword Search Server
 const DEFAULT_PORT: &str = "9069";
 
 const MEMORY_BUDGET_IN_BYTES: usize = 100_000_000;
 
+const INDEX_STORAGE_DIR: &str = "index_storage";
+
+// socket address
+pub(crate) static DOWNLOAD_URL_PREFIX: OnceCell<Url> = OnceCell::new();
+
 /// Command line arguments configuration
 #[derive(Debug, Parser)]
 #[command(name = "Keyword Search Server", version = env!("CARGO_PKG_VERSION"), author = env!("CARGO_PKG_AUTHORS"), about = "Keyword Search Server")]
 #[command(group = ArgGroup::new("socket_address_group").multiple(false).args(&["socket_addr", "port"]))]
 struct Cli {
+    /// Download URL prefix, format: `http(s)://{IPv4_address}:{port}` or `http(s)://{domain}:{port}`
+    #[arg(long)]
+    download_url_prefix: Option<String>,
     /// Socket address of llama-proxy-server instance. For example, `0.0.0.0:9069`.
     #[arg(long, default_value = None, value_parser = clap::value_parser!(SocketAddr), group = "socket_address_group")]
     socket_addr: Option<SocketAddr>,
@@ -58,7 +75,7 @@ struct SearchHit {
 }
 
 #[tokio::main]
-async fn main() {
+async fn main() -> Result<(), ServerError> {
     // Initialize logging
     tracing_subscriber::fmt()
         .with_target(false)
@@ -85,11 +102,91 @@ async fn main() {
         None => SocketAddr::from(([0, 0, 0, 0], cli.port)),
     };
     info!("Binding to address: {}", addr);
+
+    // set DOWNLOAD_URL_PREFIX
+    match cli.download_url_prefix {
+        Some(download_url_prefix) => {
+            info!(target: "stdout", "download_url_prefix: {}", &download_url_prefix);
+
+            // download url prefix
+            info!(target: "stdout", "download_url_prefix: {}", &download_url_prefix);
+            let download_url_prefix = Url::parse(&download_url_prefix).map_err(|e| {
+                ServerError::Operation(format!(
+                    "Failed to parse `download_url_prefix` CLI option: {}",
+                    e
+                ))
+            })?;
+            if let Err(e) = DOWNLOAD_URL_PREFIX.set(download_url_prefix) {
+                let err_msg = format!("Failed to set DOWNLOAD_URL_PREFIX: {}", e);
+
+                error!(target: "stdout", "{}", &err_msg);
+
+                return Err(ServerError::Operation(err_msg));
+            }
+        }
+        None => {
+            match addr.ip() {
+                IpAddr::V4(ip) => match ip.to_string().as_str() {
+                    "0.0.0.0" => {
+                        let ipv4_addr_str = format!("http://localhost:{}", addr.port());
+
+                        info!(target: "stdout", "download_url_prefix: {}", ipv4_addr_str);
+
+                        let download_url_prefix = Url::parse(&ipv4_addr_str).map_err(|e| {
+                            ServerError::Operation(format!(
+                                "Failed to parse `download_url_prefix` CLI option: {}",
+                                e
+                            ))
+                        })?;
+                        if let Err(e) = DOWNLOAD_URL_PREFIX.set(download_url_prefix) {
+                            let err_msg = format!("Failed to set SOCKET_ADDRESS: {}", e);
+
+                            error!(target: "stdout", "{}", &err_msg);
+
+                            return Err(ServerError::Operation(err_msg));
+                        }
+                    }
+                    _ => {
+                        let ipv4_addr_str = format!("http://{}:{}", addr.ip(), addr.port());
+
+                        info!(target: "stdout", "download_url_prefix: {}", ipv4_addr_str);
+
+                        let download_url_prefix = Url::parse(&ipv4_addr_str).map_err(|e| {
+                            ServerError::Operation(format!(
+                                "Failed to parse `download_url_prefix` CLI option: {}",
+                                e
+                            ))
+                        })?;
+                        if let Err(e) = DOWNLOAD_URL_PREFIX.set(download_url_prefix) {
+                            let err_msg = format!("Failed to set SOCKET_ADDRESS: {}", e);
+
+                            error!(target: "stdout", "{}", &err_msg);
+
+                            return Err(ServerError::Operation(err_msg));
+                        }
+                    }
+                },
+                IpAddr::V6(_) => {
+                    let err_msg = "ipv6 is not supported";
+
+                    // log error
+                    error!(target: "stdout", "{}", err_msg);
+
+                    // return error
+                    return Err(ServerError::Operation(err_msg.into()));
+                }
+            }
+        }
+    }
+
     let listener = tokio::net::TcpListener::bind(&addr).await.unwrap();
     info!("Server running at http://{}", addr);
 
     info!("Starting to accept connections...");
-    axum::serve(listener, app).await.unwrap();
+    match axum::serve(listener, app).await {
+        Ok(_) => Ok(()),
+        Err(e) => Err(ServerError::Operation(e.to_string())),
+    }
 }
 
 // Document indexing request for JSON input
@@ -255,9 +352,9 @@ async fn process_multipart(mut multipart: Multipart) -> Json<IndexResponse> {
 
     // Create index directory
     info!("Starting index creation");
-    let index_path = TempDir::new().unwrap();
+    let index_storage_dir = std::env::current_dir().unwrap().join(INDEX_STORAGE_DIR);
     let index_name = format!("index-{}", uuid::Uuid::new_v4());
-    let index_path = index_path.path().join(&index_name);
+    let index_path = index_storage_dir.as_path().join(&index_name);
     debug!(path = %index_path.display(), "Created temporary index directory");
 
     if !index_path.exists() {
@@ -460,9 +557,9 @@ async fn process_json(request: IndexRequest) -> Json<IndexResponse> {
 
     // Create index directory
     info!("Starting index creation");
-    let index_path = TempDir::new().unwrap();
+    let index_storage_dir = std::env::current_dir().unwrap().join(INDEX_STORAGE_DIR);
     let index_name = format!("index-{}", uuid::Uuid::new_v4());
-    let index_path = index_path.path().join(&index_name);
+    let index_path = index_storage_dir.as_path().join(&index_name);
     debug!(path = %index_path.display(), "Created temporary index directory");
 
     if !index_path.exists() {
@@ -655,7 +752,10 @@ async fn query_handler(Json(request): Json<QueryRequest>) -> Json<QueryResponse>
         "Received search request"
     );
 
-    let index_path = std::env::current_dir().unwrap().join(&request.index);
+    let index_path = std::env::current_dir()
+        .unwrap()
+        .join(INDEX_STORAGE_DIR)
+        .join(&request.index);
     if !index_path.exists() {
         error!(path = %index_path.display(), "Index path does not exist");
         return Json(QueryResponse {
