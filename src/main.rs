@@ -8,6 +8,7 @@ use axum::{
     Json, Router,
 };
 use clap::{ArgGroup, Parser};
+use endpoints::keyword_search::{DocumentInput, DocumentResult, IndexRequest, IndexResponse};
 use error::ServerError;
 use http::status::StatusCode;
 use once_cell::sync::OnceCell;
@@ -191,37 +192,6 @@ async fn main() -> Result<(), ServerError> {
         Ok(_) => Ok(()),
         Err(e) => Err(ServerError::Operation(e.to_string())),
     }
-}
-
-// Document indexing request for JSON input
-#[derive(Debug, Deserialize)]
-struct IndexRequest {
-    documents: Vec<DocumentInput>,
-}
-
-#[derive(Debug, Clone, Deserialize)]
-struct DocumentInput {
-    content: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    title: Option<String>,
-}
-
-// Document processing result
-#[derive(Debug, Serialize)]
-struct DocumentResult {
-    filename: String,
-    status: String,
-    error: Option<String>,
-}
-
-// Index response
-#[derive(Debug, Serialize)]
-struct IndexResponse {
-    results: Vec<DocumentResult>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    index_name: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    download_url: Option<String>,
 }
 
 // Main handler that routes to appropriate processing function based on content type
