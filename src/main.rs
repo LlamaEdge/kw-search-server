@@ -15,6 +15,8 @@ use tracing::{debug, error, info, warn, Level};
 // default port of Keyword Search Server
 const DEFAULT_PORT: &str = "9069";
 
+const MEMORY_BUDGET_IN_BYTES: usize = 100_000_000;
+
 /// Command line arguments configuration
 #[derive(Debug, Parser)]
 #[command(name = "Keyword Search Server", version = env!("CARGO_PKG_VERSION"), author = env!("CARGO_PKG_AUTHORS"), about = "Keyword Search Server")]
@@ -38,7 +40,7 @@ struct QueryRequest {
 }
 
 fn default_top_k() -> usize {
-    10
+    5
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -285,7 +287,7 @@ async fn process_multipart(mut multipart: Multipart) -> Json<IndexResponse> {
 
     // Create index writer
     info!("Initializing index writer");
-    let mut index_writer = match index.writer(100_000_000) {
+    let mut index_writer = match index.writer(MEMORY_BUDGET_IN_BYTES) {
         Ok(writer) => writer,
         Err(e) => {
             error!(error = %e, "Failed to create index writer");
@@ -490,7 +492,7 @@ async fn process_json(request: IndexRequest) -> Json<IndexResponse> {
 
     // Create index writer
     info!("Initializing index writer");
-    let mut index_writer = match index.writer(100_000_000) {
+    let mut index_writer = match index.writer(MEMORY_BUDGET_IN_BYTES) {
         Ok(writer) => writer,
         Err(e) => {
             error!(error = %e, "Failed to create index writer");
