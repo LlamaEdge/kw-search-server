@@ -364,8 +364,6 @@ async fn process_multipart(mut multipart: Multipart) -> Json<IndexResponse> {
     let index_storage_dir = std::env::current_dir().unwrap().join(INDEX_STORAGE_DIR);
     let index_name = format!("index-{}", uuid::Uuid::new_v4());
     let index_path = index_storage_dir.as_path().join(&index_name);
-    debug!(path = %index_path.display(), "Created temporary index directory");
-
     if !index_path.exists() {
         debug!(path = %index_path.display(), "Creating index directory");
         std::fs::create_dir_all(&index_path).unwrap();
@@ -375,7 +373,7 @@ async fn process_multipart(mut multipart: Multipart) -> Json<IndexResponse> {
     info!("Defining index schema");
     let mut schema_builder = Schema::builder();
     let title = schema_builder.add_text_field("title", TEXT | STORED);
-    let body = schema_builder.add_text_field("body", TEXT);
+    let body = schema_builder.add_text_field("body", TEXT | STORED);
     let schema = schema_builder.build();
 
     // Create index
@@ -553,8 +551,6 @@ async fn process_json(request: IndexRequest) -> Json<IndexResponse> {
     let index_storage_dir = std::env::current_dir().unwrap().join(INDEX_STORAGE_DIR);
     let index_name = format!("index-{}", uuid::Uuid::new_v4());
     let index_path = index_storage_dir.as_path().join(&index_name);
-    debug!(path = %index_path.display(), "Created temporary index directory");
-
     if !index_path.exists() {
         debug!(path = %index_path.display(), "Creating index directory");
         std::fs::create_dir_all(&index_path).unwrap();
