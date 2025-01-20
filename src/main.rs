@@ -1,5 +1,7 @@
 mod error;
 
+use axum::extract::Path;
+use axum::response::IntoResponse;
 use axum::{
     extract::{FromRequest, Multipart},
     routing::{get, post},
@@ -7,17 +9,15 @@ use axum::{
 };
 use clap::{ArgGroup, Parser};
 use error::ServerError;
+use http::status::StatusCode;
 use once_cell::sync::OnceCell;
 use serde::{Deserialize, Serialize};
 use std::{
     fs::File,
+    io::Read,
     net::{IpAddr, SocketAddr},
-    path::PathBuf,
 };
-use tantivy::{
-    collector::TopDocs, doc, query::QueryParser, schema::*, Index, IndexWriter, ReloadPolicy,
-};
-use tempfile::TempDir;
+use tantivy::{collector::TopDocs, doc, query::QueryParser, schema::*, Index, ReloadPolicy};
 use tracing::{debug, error, info, warn, Level};
 use url::Url;
 
@@ -93,7 +93,11 @@ async fn main() -> Result<(), ServerError> {
     // Build application routes
     let app = Router::new()
         .route("/v1/index", post(index_document_handler))
-        .route("/v1/search", post(query_handler));
+        .route("/v1/search", post(query_handler))
+        .route(
+            "/v1/files/download/{index_name}",
+            get(download_index_file_handler),
+        );
     info!("Route configuration completed");
 
     // Run the server
@@ -215,7 +219,9 @@ struct DocumentResult {
 struct IndexResponse {
     results: Vec<DocumentResult>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    index_path: Option<String>,
+    index_name: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    download_url: Option<String>,
 }
 
 // Main handler that routes to appropriate processing function based on content type
@@ -243,7 +249,8 @@ async fn index_document_handler(
                             status: "failed".to_string(),
                             error: Some("Failed to parse multipart request".to_string()),
                         }],
-                        index_path: None,
+                        index_name: None,
+                        download_url: None,
                     });
                 }
             };
@@ -261,7 +268,8 @@ async fn index_document_handler(
                             status: "failed".to_string(),
                             error: Some("Failed to parse JSON request".to_string()),
                         }],
-                        index_path: None,
+                        index_name: None,
+                        download_url: None,
                     });
                 }
             };
@@ -275,7 +283,8 @@ async fn index_document_handler(
                     status: "failed".to_string(),
                     error: Some("Unsupported content type".to_string()),
                 }],
-                index_path: None,
+                index_name: None,
+                download_url: None,
             })
         }
     };
@@ -377,7 +386,8 @@ async fn process_multipart(mut multipart: Multipart) -> Json<IndexResponse> {
             error!(error = %e, "Failed to create index");
             return Json(IndexResponse {
                 results,
-                index_path: None,
+                index_name: None,
+                download_url: None,
             });
         }
     };
@@ -390,7 +400,8 @@ async fn process_multipart(mut multipart: Multipart) -> Json<IndexResponse> {
             error!(error = %e, "Failed to create index writer");
             return Json(IndexResponse {
                 results,
-                index_path: None,
+                index_name: None,
+                download_url: None,
             });
         }
     };
@@ -426,54 +437,36 @@ async fn process_multipart(mut multipart: Multipart) -> Json<IndexResponse> {
         error!(error = %e, "Failed to commit index");
         return Json(IndexResponse {
             results,
-            index_path: None,
+            index_name: None,
+            download_url: None,
         });
     }
 
-    // Compress index
-    info!("Starting index compression");
-    let compressed_filename = format!("{}.tar.gz", index_name);
-    let compressed_index_path = std::env::current_dir().unwrap().join(&compressed_filename);
+    // generate download url for index file
+    let url = {
+        // get the socket address of request
+        let download_url_prefix = DOWNLOAD_URL_PREFIX.get().unwrap();
 
-    let file = match File::create(&compressed_index_path) {
-        Ok(file) => file,
-        Err(e) => {
-            error!(
-                path = %compressed_index_path.display(),
-                error = %e,
-                "Failed to create compressed index file"
-            );
-            return Json(IndexResponse {
-                results,
-                index_path: None,
-            });
-        }
+        let host = match download_url_prefix.port() {
+            Some(port) => {
+                format!("{}:{}", download_url_prefix.host_str().unwrap(), port)
+            }
+            None => download_url_prefix.host_str().unwrap().to_string(),
+        };
+
+        format!(
+            "{}://{}/v1/files/download/{}",
+            download_url_prefix.scheme(),
+            host,
+            &index_name,
+        )
     };
-
-    let mut builder = tar::Builder::new(file);
-    if let Err(e) = builder.append_dir_all(".", &index_path) {
-        error!(error = %e, "Failed to compress index directory");
-        return Json(IndexResponse {
-            results,
-            index_path: None,
-        });
-    }
-    if let Err(e) = builder.finish() {
-        error!(error = %e, "Failed to finalize index compression");
-        return Json(IndexResponse {
-            results,
-            index_path: None,
-        });
-    }
-
-    info!(
-        path = %compressed_index_path.display(),
-        "Index compression completed"
-    );
+    info!(url = %url, "Download URL generated");
 
     Json(IndexResponse {
         results,
-        index_path: Some(compressed_index_path.to_string_lossy().to_string()),
+        index_name: Some(index_name),
+        download_url: Some(url),
     })
 }
 
@@ -582,7 +575,8 @@ async fn process_json(request: IndexRequest) -> Json<IndexResponse> {
             error!(error = %e, "Failed to create index");
             return Json(IndexResponse {
                 results,
-                index_path: None,
+                index_name: None,
+                download_url: None,
             });
         }
     };
@@ -595,7 +589,8 @@ async fn process_json(request: IndexRequest) -> Json<IndexResponse> {
             error!(error = %e, "Failed to create index writer");
             return Json(IndexResponse {
                 results,
-                index_path: None,
+                index_name: None,
+                download_url: None,
             });
         }
     };
@@ -668,50 +663,10 @@ async fn process_json(request: IndexRequest) -> Json<IndexResponse> {
         error!(error = %e, "Failed to commit index");
         return Json(IndexResponse {
             results,
-            index_path: None,
+            index_name: None,
+            download_url: None,
         });
     }
-
-    // Compress index
-    info!("Starting index compression");
-    let compressed_filename = format!("{}.tar.gz", index_name);
-    let compressed_index_path = std::env::current_dir().unwrap().join(&compressed_filename);
-
-    let file = match File::create(&compressed_index_path) {
-        Ok(file) => file,
-        Err(e) => {
-            error!(
-                path = %compressed_index_path.display(),
-                error = %e,
-                "Failed to create compressed index file"
-            );
-            return Json(IndexResponse {
-                results,
-                index_path: None,
-            });
-        }
-    };
-
-    let mut builder = tar::Builder::new(file);
-    if let Err(e) = builder.append_dir_all(".", &index_path) {
-        error!(error = %e, "Failed to compress index directory");
-        return Json(IndexResponse {
-            results,
-            index_path: None,
-        });
-    }
-    if let Err(e) = builder.finish() {
-        error!(error = %e, "Failed to finalize index compression");
-        return Json(IndexResponse {
-            results,
-            index_path: None,
-        });
-    }
-
-    info!(
-        path = %compressed_index_path.display(),
-        "Index compression completed"
-    );
 
     info!(
         total_documents = results.len(),
@@ -720,9 +675,31 @@ async fn process_json(request: IndexRequest) -> Json<IndexResponse> {
         "JSON processing completed"
     );
 
+    // generate download url for index file
+    let url = {
+        // get the socket address of request
+        let download_url_prefix = DOWNLOAD_URL_PREFIX.get().unwrap();
+
+        let host = match download_url_prefix.port() {
+            Some(port) => {
+                format!("{}:{}", download_url_prefix.host_str().unwrap(), port)
+            }
+            None => download_url_prefix.host_str().unwrap().to_string(),
+        };
+
+        format!(
+            "{}://{}/v1/files/download/{}",
+            download_url_prefix.scheme(),
+            host,
+            &index_name,
+        )
+    };
+    info!(url = %url, "Download URL generated");
+
     Json(IndexResponse {
         results,
-        index_path: Some(compressed_index_path.to_string_lossy().to_string()),
+        index_name: Some(index_name),
+        download_url: Some(url),
     })
 }
 
@@ -856,4 +833,148 @@ async fn query_handler(Json(request): Json<QueryRequest>) -> Json<QueryResponse>
     info!(hits = hits.len(), "Search completed successfully");
 
     Json(QueryResponse { hits, error: None })
+}
+
+// download index file
+async fn download_index_file_handler(
+    Path(index_name): Path<String>,
+) -> impl axum::response::IntoResponse {
+    info!(
+        index_name = %index_name,
+        "Received index file download request"
+    );
+
+    let index_storage_dir = std::env::current_dir().unwrap().join(INDEX_STORAGE_DIR);
+    let index_path = index_storage_dir.as_path().join(&index_name);
+
+    // Check if index exists
+    if !index_path.exists() {
+        let err_msg = format!("Index '{}' not found", index_name);
+        error!(
+            index_name = %index_name,
+            path = %index_path.display(),
+            "Index directory not found"
+        );
+        return (StatusCode::NOT_FOUND, err_msg).into_response();
+    }
+
+    info!("Found index directory");
+
+    // Prepare compression
+    let compressed_filename = format!("{}.tar.gz", index_name);
+    let compressed_index_path = index_storage_dir.as_path().join(&compressed_filename);
+
+    // check if compressed file exists
+    if !compressed_index_path.exists() {
+        info!("Starting index compression");
+
+        // Create compressed file
+        let file = match File::create(&compressed_index_path) {
+            Ok(file) => {
+                info!(
+                    path = %compressed_index_path.display(),
+                    "Created compressed file"
+                );
+                file
+            }
+            Err(e) => {
+                let err_msg = format!("Failed to create compressed index file: {}", e);
+                error!(
+                    error = %e,
+                    path = %compressed_index_path.display(),
+                    "Failed to create compressed file"
+                );
+                return (StatusCode::INTERNAL_SERVER_ERROR, err_msg).into_response();
+            }
+        };
+
+        // Compress directory
+        let mut builder = tar::Builder::new(file);
+        if let Err(e) = builder.append_dir_all(".", &index_path) {
+            let err_msg = format!("Failed to compress index directory: {}", e);
+            error!(
+                error = %e,
+                source = %index_path.display(),
+                target = %compressed_index_path.display(),
+                "Failed to compress index directory"
+            );
+            return (StatusCode::INTERNAL_SERVER_ERROR, err_msg).into_response();
+        }
+
+        if let Err(e) = builder.finish() {
+            let err_msg = format!("Failed to finalize index compression: {}", e);
+            error!(
+                error = %e,
+                path = %compressed_index_path.display(),
+                "Failed to finalize compression"
+            );
+            return (StatusCode::INTERNAL_SERVER_ERROR, err_msg).into_response();
+        }
+    }
+
+    info!("Index compression completed");
+
+    // Read compressed file
+    let mut file = match File::open(&compressed_index_path) {
+        Ok(file) => file,
+        Err(e) => {
+            let err_msg = format!("Failed to open the compressed file: {}", e);
+            error!(
+                error = %e,
+                path = %compressed_index_path.display(),
+                "Failed to open compressed file"
+            );
+            return (StatusCode::INTERNAL_SERVER_ERROR, err_msg).into_response();
+        }
+    };
+
+    // Read file content
+    let mut buffer: Vec<u8> = Vec::new();
+    if let Err(e) = file.read_to_end(&mut buffer) {
+        let err_msg = format!("Failed to read the compressed file content: {}", e);
+        error!(
+            error = %e,
+            path = %compressed_index_path.display(),
+            "Failed to read file content"
+        );
+        return (StatusCode::INTERNAL_SERVER_ERROR, err_msg).into_response();
+    }
+
+    // Prepare response
+    let content_type = "application/gzip";
+    let content_disposition = format!("attachment; filename=\"{}\"", compressed_filename);
+    let content_length = buffer.len();
+    let body = axum::body::Body::from(buffer);
+
+    info!(
+        index_name = %index_name,
+        content_type = %content_type,
+        content_length = content_length,
+        filename = %compressed_filename,
+        "Prepared download response"
+    );
+
+    match axum::response::Response::builder()
+        .header("Access-Control-Allow-Origin", "*")
+        .header("Access-Control-Allow-Methods", "*")
+        .header("Access-Control-Allow-Headers", "*")
+        .header("Content-Type", content_type)
+        .header("Content-Disposition", content_disposition.as_str())
+        .header("Content-Length", content_length.to_string().as_str())
+        .body(body)
+    {
+        Ok(response) => {
+            info!("Returned download response");
+            response
+        }
+        Err(e) => {
+            let err_msg = format!("Failed to build response: {}", e);
+            error!(
+                error = %e,
+                index_name = %index_name,
+                "Failed to build response"
+            );
+            (StatusCode::INTERNAL_SERVER_ERROR, err_msg).into_response()
+        }
+    }
 }

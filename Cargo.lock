@@ -802,12 +802,12 @@ version = "0.1.0"
 dependencies = [
  "axum",
  "clap",
+ "http",
  "once_cell",
  "serde",
  "serde_json",
  "tantivy",
  "tar",
- "tempfile",
  "thiserror 2.0.11",
  "tokio",
  "tracing",
