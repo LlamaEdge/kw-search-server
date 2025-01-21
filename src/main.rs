@@ -702,7 +702,7 @@ async fn query_handler(Json(request): Json<QueryRequest>) -> Json<QueryResponse>
     if !index_path.exists() {
         let err_msg = format!("Index '{}' does not exist", request.index);
 
-        error!(&err_msg);
+        error!("{}", &err_msg);
 
         return Json(QueryResponse {
             hits: Vec::new(),
@@ -716,7 +716,7 @@ async fn query_handler(Json(request): Json<QueryRequest>) -> Json<QueryResponse>
         Err(e) => {
             let err_msg = format!("Failed to open index: {}", e);
 
-            error!(&err_msg);
+            error!("{}", &err_msg);
 
             return Json(QueryResponse {
                 hits: Vec::new(),
@@ -752,7 +752,7 @@ async fn query_handler(Json(request): Json<QueryRequest>) -> Json<QueryResponse>
         Err(e) => {
             let err_msg = format!("Failed to parse query: {}", e);
 
-            error!(&err_msg);
+            error!("{}", &err_msg);
 
             return Json(QueryResponse {
                 hits: Vec::new(),
@@ -768,7 +768,7 @@ async fn query_handler(Json(request): Json<QueryRequest>) -> Json<QueryResponse>
         Err(e) => {
             let err_msg = format!("Search failed: {}", e);
 
-            error!(&err_msg);
+            error!("{}", &err_msg);
 
             return Json(QueryResponse {
                 hits: Vec::new(),
