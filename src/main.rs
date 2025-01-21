@@ -700,10 +700,13 @@ async fn query_handler(Json(request): Json<QueryRequest>) -> Json<QueryResponse>
         .join(INDEX_STORAGE_DIR)
         .join(&request.index);
     if !index_path.exists() {
-        error!(path = %index_path.display(), "Index path does not exist");
+        let err_msg = format!("Index '{}' does not exist", request.index);
+
+        error!(&err_msg);
+
         return Json(QueryResponse {
             hits: Vec::new(),
-            error: Some("Index path does not exist".to_string()),
+            error: Some(err_msg),
         });
     }
 
@@ -711,10 +714,13 @@ async fn query_handler(Json(request): Json<QueryRequest>) -> Json<QueryResponse>
     let index = match Index::open_in_dir(&index_path) {
         Ok(index) => index,
         Err(e) => {
-            error!(error = %e, "Failed to open index");
+            let err_msg = format!("Failed to open index: {}", e);
+
+            error!(&err_msg);
+
             return Json(QueryResponse {
                 hits: Vec::new(),
-                error: Some(format!("Failed to open index: {}", e)),
+                error: Some(err_msg),
             });
         }
     };
@@ -744,10 +750,13 @@ async fn query_handler(Json(request): Json<QueryRequest>) -> Json<QueryResponse>
     let query = match query_parser.parse_query(&query_str) {
         Ok(q) => q,
         Err(e) => {
-            error!(error = %e, "Failed to parse query");
+            let err_msg = format!("Failed to parse query: {}", e);
+
+            error!(&err_msg);
+
             return Json(QueryResponse {
                 hits: Vec::new(),
-                error: Some(format!("Failed to parse query: {}", e)),
+                error: Some(err_msg),
             });
         }
     };
@@ -757,10 +766,13 @@ async fn query_handler(Json(request): Json<QueryRequest>) -> Json<QueryResponse>
     let top_docs = match searcher.search(&query, &TopDocs::with_limit(request.top_k)) {
         Ok(docs) => docs,
         Err(e) => {
-            error!(error = %e, "Search failed");
+            let err_msg = format!("Search failed: {}", e);
+
+            error!(&err_msg);
+
             return Json(QueryResponse {
                 hits: Vec::new(),
-                error: Some(format!("Search failed: {}", e)),
+                error: Some(err_msg),
             });
         }
     };
