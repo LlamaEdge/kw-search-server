@@ -8,11 +8,13 @@ use axum::{
     Json, Router,
 };
 use clap::{ArgGroup, Parser};
-use endpoints::keyword_search::{DocumentInput, DocumentResult, IndexRequest, IndexResponse};
+use endpoints::keyword_search::{
+    DocumentInput, DocumentResult, IndexRequest, IndexResponse, QueryRequest, QueryResponse,
+    SearchHit,
+};
 use error::ServerError;
 use http::status::StatusCode;
 use once_cell::sync::OnceCell;
-use serde::{Deserialize, Serialize};
 use std::{
     fs::File,
     io::Read,
@@ -46,33 +48,6 @@ struct Cli {
     /// Socket address of llama-proxy-server instance
     #[arg(long, default_value = DEFAULT_PORT, value_parser = clap::value_parser!(u16), group = "socket_address_group")]
     port: u16,
-}
-
-// Add these new structs for query handling
-#[derive(Debug, Clone, Deserialize)]
-struct QueryRequest {
-    query: String,
-    #[serde(default = "default_top_k")]
-    top_k: usize,
-    index: String,
-}
-
-fn default_top_k() -> usize {
-    5
-}
-
-#[derive(Debug, Clone, Serialize)]
-struct QueryResponse {
-    hits: Vec<SearchHit>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    error: Option<String>,
-}
-
-#[derive(Debug, Clone, Serialize)]
-struct SearchHit {
-    title: String,
-    content: String,
-    score: f32,
 }
 
 #[tokio::main]
@@ -116,8 +91,8 @@ async fn main() -> Result<(), ServerError> {
             // download url prefix
             info!(target: "stdout", "download_url_prefix: {}", &download_url_prefix);
             let download_url_prefix = Url::parse(&download_url_prefix).map_err(|e| {
-                ServerError::Operation(format!(
-                    "Failed to parse `download_url_prefix` CLI option: {}",
+                ServerError::ArgumentError(format!(
+                    "Failed to parse `download_url_prefix` CLI option. Reason: {}",
                     e
                 ))
             })?;
