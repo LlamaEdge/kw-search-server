@@ -207,5 +207,5 @@ If the search is successful, the response body in JSON format is as follows:
 The following diagram shows the integration of `kw-search-server` with LlamaEdge-RAG.
 
 <div align=center>
-<img src="assets/rag.png" alt="Integration with LlamaEdge-RAG" width="60%" />
+<img src="assets/rag.png" alt="Integration with LlamaEdge-RAG" width="80%" />
 </div>
