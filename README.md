@@ -31,36 +31,36 @@ Keyword search in RAG scenarios is a lightweight and efficient retrieval method.
 
 - Run `kw-search-server`
 
-```bash
-# Run server on default port 9069
-./kw-search-server
+  ```bash
+  # Run server on default port 9069
+  ./kw-search-server
 
-# Run server on custom port, e.g. 10086
-./kw-search-server --port 10086
+  # Run server on custom port, e.g. 10086
+  ./kw-search-server --port 10086
 
-# Or, run server with custom socket address, e.g. 0.0.0.0:10086
-./kw-search-server --socket-addr 0.0.0.0:10086
-```
+  # Or, run server with custom socket address, e.g. 0.0.0.0:10086
+  ./kw-search-server --socket-addr 0.0.0.0:10086
+  ```
 
-To see all CLI options:
+  To see all CLI options:
 
-```bash
-./kw-search-server --help
+  ```bash
+  ./kw-search-server --help
 
-Usage: kw-search-server [OPTIONS]
+  Usage: kw-search-server [OPTIONS]
 
-Options:
-      --download-url-prefix <DOWNLOAD_URL_PREFIX>
-          Download URL prefix, format: `http(s)://{IPv4_address}:{port}` or `http(s)://{domain}:{port}`
-      --socket-addr <SOCKET_ADDR>
-          Socket address of llama-proxy-server instance. For example, `0.0.0.0:9069`
-      --port <PORT>
-          Socket address of llama-proxy-server instance [default: 9069]
-  -h, --help
-          Print help
-  -V, --version
-          Print version
-```
+  Options:
+        --download-url-prefix <DOWNLOAD_URL_PREFIX>
+            Download URL prefix, format: `http(s)://{IPv4_address}:{port}` or `http(s)://{domain}:{port}`
+        --socket-addr <SOCKET_ADDR>
+            Socket address of llama-proxy-server instance. For example, `0.0.0.0:9069`
+        --port <PORT>
+            Socket address of llama-proxy-server instance [default: 9069]
+    -h, --help
+            Print help
+    -V, --version
+            Print version
+  ```
 
 ## Usage: indexing and keyword search
 
