@@ -68,10 +68,10 @@ async fn main() -> Result<(), ServerError> {
 
     // Build application routes
     let app = Router::new()
-        .route("/v1/index", post(index_document_handler))
+        .route("/v1/index/create", post(index_document_handler))
         .route("/v1/search", post(query_handler))
         .route(
-            "/v1/files/download/{index_name}",
+            "/v1/index/download/{index_name}",
             get(download_index_file_handler),
         );
     info!("Route configuration completed");
@@ -398,7 +398,7 @@ async fn process_multipart(mut multipart: Multipart) -> Json<IndexResponse> {
         };
 
         format!(
-            "{}://{}/v1/files/download/{}",
+            "{}://{}/v1/index/download/{}",
             download_url_prefix.scheme(),
             host,
             &index_name,
@@ -629,7 +629,7 @@ async fn process_json(request: IndexRequest) -> Json<IndexResponse> {
         };
 
         format!(
-            "{}://{}/v1/files/download/{}",
+            "{}://{}/v1/index/download/{}",
             download_url_prefix.scheme(),
             host,
             &index_name,
