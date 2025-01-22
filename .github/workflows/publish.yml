@@ -68,8 +68,8 @@ jobs:
       - name: Strip binary (linux and macos)
         if: matrix.build == 'linux-x86_64' || matrix.build == 'macos-x86_64' || matrix.build == 'macos-arm64'
         run: |
-          strip "target/${{ matrix.target }}/release/gaias"
-          ls -al "target/${{ matrix.target }}/release/gaias"
+          strip "target/${{ matrix.target }}/release/kw-search-server"
+          ls -al "target/${{ matrix.target }}/release/kw-search-server"
 
       - name: Build archive
         shell: bash
@@ -78,24 +78,24 @@ jobs:
           # cp LICENSE README.md archive/
           cd archive
           if [ "${{ matrix.build }}" = "windows" ]; then
-            cp "../target/${{ matrix.target }}/release/gaias.exe" ./
-            7z a "${{ matrix.archive-name }}" gaias.exe
+            cp "../target/${{ matrix.target }}/release/kw-search-server.exe" ./
+            7z a "${{ matrix.archive-name }}" kw-search-server.exe
           fi
 
           if [ "${{ matrix.build }}" = "linux-x86_64" ]; then
-            cp "../target/${{ matrix.target }}/release/gaias" ./
-            sha256sum gaias > SHA256SUM
+            cp "../target/${{ matrix.target }}/release/kw-search-server" ./
+            sha256sum kw-search-server > SHA256SUM
             echo "Debug info(SHA256SUM):"
             cat SHA256SUM
-            tar -czf "${{ matrix.archive-name }}" SHA256SUM gaias
+            tar -czf "${{ matrix.archive-name }}" SHA256SUM kw-search-server
           fi
 
           if [ "${{ matrix.build }}" = "macos-x86_64" ] || [ "${{ matrix.build }}" = "macos-arm64" ]; then
-            cp "../target/${{ matrix.target }}/release/gaias" ./
-            shasum -a 256 gaias > SHA256SUM
+            cp "../target/${{ matrix.target }}/release/kw-search-server" ./
+            shasum -a 256 kw-search-server > SHA256SUM
             echo "Debug info(SHA256SUM):"
             cat SHA256SUM
-            tar -czf "${{ matrix.archive-name }}" SHA256SUM gaias
+            tar -czf "${{ matrix.archive-name }}" SHA256SUM kw-search-server
           fi
           ls -al
 
