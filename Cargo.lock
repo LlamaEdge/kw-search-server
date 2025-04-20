@@ -376,8 +376,8 @@ dependencies = [
 
 [[package]]
 name = "endpoints"
-version = "0.24.0"
-source = "git+https://github.com/LlamaEdge/LlamaEdge.git?branch=feat-kw-search#3e64533181284b2a155057002e3979d19d648e19"
+version = "0.25.1"
+source = "git+https://github.com/LlamaEdge/LlamaEdge.git?branch=feat-mcp-client#5377c66d091279bb90a4541341e27e87657c0911"
 dependencies = [
  "indexmap",
  "serde",
