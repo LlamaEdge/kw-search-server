@@ -32,7 +32,7 @@ Keyword search in RAG scenarios is a lightweight and efficient retrieval method.
 - Run `kw-search-server`
 
   ```bash
-  # Run server on default port 9069
+  # Run server on default port 12306
   ./kw-search-server
 
   # Run server on custom port, e.g. 10086
@@ -53,9 +53,9 @@ Keyword search in RAG scenarios is a lightweight and efficient retrieval method.
         --download-url-prefix <DOWNLOAD_URL_PREFIX>
             Download URL prefix, format: `http(s)://{IPv4_address}:{port}` or `http(s)://{domain}:{port}`
         --socket-addr <SOCKET_ADDR>
-            Socket address of llama-proxy-server instance. For example, `0.0.0.0:9069`
+            Socket address of llama-proxy-server instance. For example, `0.0.0.0:12306`
         --port <PORT>
-            Socket address of llama-proxy-server instance [default: 9069]
+            Socket address of llama-proxy-server instance [default: 12306]
     -h, --help
             Print help
     -V, --version
@@ -72,7 +72,7 @@ To create an index for a list of documents, you can use the `/v1/index/create` e
 
   ```bash
   # Create index from a list of files
-  curl --location 'http://localhost:9069/v1/index/create' \
+  curl --location 'http://localhost:12306/v1/index/create' \
   --form 'file1=@"paris.txt"' \
   --form 'file2=@"paris.md"'
   ```
@@ -104,7 +104,7 @@ To create an index for a list of documents, you can use the `/v1/index/create` e
 
   ```bash
   # Create index from a list of chunks
-  curl --location 'http://localhost:9069/v1/index/create' \
+  curl --location 'http://localhost:12306/v1/index/create' \
   --header 'Content-Type: application/json' \
   --data '{
       "documents": [
@@ -164,7 +164,7 @@ To create an index for a list of documents, you can use the `/v1/index/create` e
 To perform a keyword search, you can use the `/v1/search` endpoint:
 
 ```bash
-curl --location 'http://localhost:9069/v1/search' \
+curl --location 'http://localhost:12306/v1/search' \
 --header 'Content-Type: application/json' \
 --data '{
     "query": "What is the location of Paris, France along the Seine river?",

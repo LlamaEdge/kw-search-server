@@ -25,7 +25,7 @@ use tracing::{debug, error, info, warn, Level};
 use url::Url;
 
 // default port of Keyword Search Server
-const DEFAULT_PORT: &str = "9069";
+const DEFAULT_PORT: &str = "12306";
 
 const MEMORY_BUDGET_IN_BYTES: usize = 100_000_000;
 
@@ -203,7 +203,7 @@ async fn index_document_handler(
         }
         "application/json" => {
             info!("Processing as JSON request");
-            let payload = match axum::Json::<IndexRequest>::from_request(request, &()).await {
+            let index_request = match axum::Json::<IndexRequest>::from_request(request, &()).await {
                 Ok(Json(payload)) => payload,
                 Err(e) => {
                     error!(error = %e, "Failed to parse JSON request");
@@ -218,7 +218,7 @@ async fn index_document_handler(
                     });
                 }
             };
-            process_json(payload).await
+            process_json(index_request).await
         }
         _ => {
             warn!(content_type = content_type, "Unsupported content type");
@@ -494,7 +494,10 @@ async fn process_json(request: IndexRequest) -> Json<IndexResponse> {
     // Create index directory
     info!("Starting index creation");
     let index_storage_dir = std::env::current_dir().unwrap().join(INDEX_STORAGE_DIR);
-    let index_name = format!("index-{}", uuid::Uuid::new_v4());
+    let index_name = match request.name {
+        Some(name) => name,
+        None => format!("index-{}", uuid::Uuid::new_v4()),
+    };
     let index_path = index_storage_dir.as_path().join(&index_name);
     if !index_path.exists() {
         debug!(path = %index_path.display(), "Creating index directory");
