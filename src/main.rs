@@ -190,7 +190,7 @@ async fn index_document_handler(
                     error!(error = %e, "Failed to parse multipart request");
                     return Json(IndexResponse {
                         results: vec![DocumentResult {
-                            filename: "unknown".to_string(),
+                            filename: None,
                             status: "failed".to_string(),
                             error: Some("Failed to parse multipart request".to_string()),
                         }],
@@ -209,7 +209,7 @@ async fn index_document_handler(
                     error!(error = %e, "Failed to parse JSON request");
                     return Json(IndexResponse {
                         results: vec![DocumentResult {
-                            filename: "unknown".to_string(),
+                            filename: None,
                             status: "failed".to_string(),
                             error: Some("Failed to parse JSON request".to_string()),
                         }],
@@ -224,7 +224,7 @@ async fn index_document_handler(
             warn!(content_type = content_type, "Unsupported content type");
             Json(IndexResponse {
                 results: vec![DocumentResult {
-                    filename: "unknown".to_string(),
+                    filename: None,
                     status: "failed".to_string(),
                     error: Some("Unsupported content type".to_string()),
                 }],
@@ -260,10 +260,7 @@ async fn process_multipart(mut multipart: Multipart) -> Json<IndexResponse> {
 
     while let Ok(Some(field)) = multipart.next_field().await {
         field_count += 1;
-        let filename = field
-            .file_name()
-            .map(ToString::to_string)
-            .unwrap_or_else(|| "unknown".to_string());
+        let filename = field.file_name().map(ToString::to_string);
 
         let content_type = field
             .content_type()
@@ -272,7 +269,7 @@ async fn process_multipart(mut multipart: Multipart) -> Json<IndexResponse> {
 
         info!(
             field_number = field_count,
-            filename = %filename,
+            filename = %filename.as_ref().unwrap_or(&"Unknown".to_string()),
             content_type = %content_type,
             "Processing field"
         );
@@ -280,7 +277,7 @@ async fn process_multipart(mut multipart: Multipart) -> Json<IndexResponse> {
         if !is_valid_content_type(&content_type) {
             warn!(
                 field_number = field_count,
-                filename = %filename,
+                filename = %filename.as_ref().unwrap_or(&"Unknown".to_string()),
                 content_type = %content_type,
                 "Unsupported file type"
             );
@@ -418,7 +415,7 @@ async fn process_field_content(
     results: &mut Vec<DocumentResult>,
     documents: &mut Vec<DocumentInput>,
     field: axum::extract::multipart::Field<'_>,
-    filename: String,
+    filename: Option<String>,
 ) {
     match field.bytes().await {
         Ok(bytes) => {
@@ -435,14 +432,14 @@ async fn process_field_content(
                         Ok(_) => {
                             info!("Content processed successfully");
                             results.push(DocumentResult {
-                                filename,
+                                filename: filename.clone(),
                                 status: "indexed".to_string(),
                                 error: None,
                             });
                         }
                         Err(e) => {
                             error!(
-                                filename = %filename,
+                                filename = %filename.as_ref().unwrap_or(&"Unknown".to_string()),
                                 error = %e,
                                 "Content processing failed"
                             );
@@ -456,12 +453,12 @@ async fn process_field_content(
                 }
                 Err(e) => {
                     error!(
-                        filename = %filename,
+                        filename = %filename.as_ref().unwrap_or(&"Unknown".to_string()),
                         error = %e,
                         "UTF-8 decoding failed"
                     );
                     results.push(DocumentResult {
-                        filename,
+                        filename: filename.clone(),
                         status: "failed".to_string(),
                         error: Some("Invalid UTF-8 content".to_string()),
                     });
@@ -470,7 +467,7 @@ async fn process_field_content(
         }
         Err(e) => {
             error!(
-                filename = %filename,
+                filename = %filename.as_ref().unwrap_or(&"Unknown".to_string()),
                 error = %e,
                 "Failed to read field content"
             );
@@ -542,14 +539,11 @@ async fn process_json(request: IndexRequest) -> Json<IndexResponse> {
     // Process and index documents
     let total = request.documents.len();
     for (index, document) in request.documents.into_iter().enumerate() {
-        let filename = document
-            .title
-            .clone()
-            .unwrap_or_else(|| "Unknown".to_string());
+        let filename = document.title.clone();
         info!(
             document_number = index + 1,
             total = total,
-            filename = %filename,
+            filename = %filename.as_ref().unwrap_or(&"Unknown".to_string()),
             content_length = document.content.len(),
             "Processing document"
         );
@@ -563,7 +557,7 @@ async fn process_json(request: IndexRequest) -> Json<IndexResponse> {
         if let Err(e) = index_writer.add_document(doc) {
             error!(
                 document_number = index + 1,
-                filename = %filename,
+                filename = %filename.as_ref().unwrap_or(&"Unknown".to_string()),
                 error = %e,
                 "Failed to add document to index"
             );
@@ -588,7 +582,7 @@ async fn process_json(request: IndexRequest) -> Json<IndexResponse> {
             Err(e) => {
                 error!(
                     document_number = index + 1,
-                    filename = %filename,
+                    filename = %filename.as_ref().unwrap_or(&"Unknown".to_string()),
                     error = %e,
                     "Document processing failed"
                 );
