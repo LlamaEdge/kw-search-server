@@ -14,19 +14,23 @@ Keyword search in RAG scenarios is a lightweight and efficient retrieval method.
 - Download `kw-search-server` binary
 
   ```bash
-  export VERSION=0.1.0
+  export VERSION=0.1.1
 
   # macOS on Apple Silicon
-  curl -LO https://github.com/LlamaEdge/kw-search-server/releases/download/${VERSION}/server-assistant-aarch64-apple-darwin.tar.gz
-  tar -xvzf server-assistant-aarch64-apple-darwin.tar.gz
+  curl -LO https://github.com/LlamaEdge/kw-search-server/releases/download/${VERSION}/kw-search-server-aarch64-apple-darwin.tar.gz
+  tar -xvzf kw-search-server-aarch64-apple-darwin.tar.gz
 
   # macOS on Intel
-  curl -LO https://github.com/LlamaEdge/kw-search-server/releases/download/${VERSION}/server-assistant-x86_64-apple-darwin.tar.gz
-  tar -xvzf server-assistant-x86_64-apple-darwin.tar.gz
+  curl -LO https://github.com/LlamaEdge/kw-search-server/releases/download/${VERSION}/kw-search-server-x86_64-apple-darwin.tar.gz
+  tar -xvzf kw-search-server-x86_64-apple-darwin.tar.gz
 
-  # Linux
-  curl -LO https://github.com/LlamaEdge/kw-search-server/releases/download/${VERSION}/server-assistant-x86_64-unknown-linux-gnu.tar.gz
-  tar -xvzf server-assistant-x86_64-unknown-linux-gnu.tar.gz
+  # Linux on x86_64
+  curl -LO https://github.com/LlamaEdge/kw-search-server/releases/download/${VERSION}/kw-search-server-x86_64-unknown-linux-gnu.tar.gz
+  tar -xvzf kw-search-server-x86_64-unknown-linux-gnu.tar.gz
+
+  # Linux on aarch64
+  curl -LO https://github.com/LlamaEdge/kw-search-server/releases/download/${VERSION}/kw-search-server-aarch64-unknown-linux-gnu.tar.gz
+  tar -xvzf kw-search-server-aarch64-unknown-linux-gnu.tar.gz
   ```
 
 - Run `kw-search-server`
