@@ -42,7 +42,7 @@ struct Cli {
     /// Download URL prefix, format: `http(s)://{IPv4_address}:{port}` or `http(s)://{domain}:{port}`
     #[arg(long)]
     download_url_prefix: Option<String>,
-    /// Socket address of llama-proxy-server instance. For example, `0.0.0.0:9069`.
+    /// Socket address of llama-proxy-server instance. For example, `0.0.0.0:12306`.
     #[arg(long, default_value = None, value_parser = clap::value_parser!(SocketAddr), group = "socket_address_group")]
     socket_addr: Option<SocketAddr>,
     /// Socket address of llama-proxy-server instance
