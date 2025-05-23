@@ -77,6 +77,7 @@ To create an index for a list of documents, you can use the `/v1/index/create` e
   ```bash
   # Create index from a list of files
   curl --location 'http://localhost:12306/v1/index/create' \
+  --form 'index_name="paris"' \
   --form 'file1=@"paris.txt"' \
   --form 'file2=@"paris.md"'
   ```
@@ -97,8 +98,8 @@ To create an index for a list of documents, you can use the `/v1/index/create` e
               "error": null
           }
       ],
-      "index_name": "index-4aae1cf6-d8dc-4233-b2bb-43911f9b74fd",
-      "download_url": "http://localhost:9069/v1/index/download/index-4aae1cf6-d8dc-4233-b2bb-43911f9b74fd"
+      "index_name": "paris",
+      "download_url": "http://localhost:9069/v1/index/download/paris"
   }
   ```
 
@@ -111,6 +112,7 @@ To create an index for a list of documents, you can use the `/v1/index/create` e
   curl --location 'http://localhost:12306/v1/index/create' \
   --header 'Content-Type: application/json' \
   --data '{
+      "index": "paris",
       "documents": [
           {
               "content": "Paris, city and capital of France, ..."
@@ -158,8 +160,8 @@ To create an index for a list of documents, you can use the `/v1/index/create` e
               "error": null
           }
       ],
-      "index_name": "index-a1f79ad1-b47b-4e36-948e-a591646ca014",
-      "download_url": "http://localhost:9069/v1/index/download/index-a1f79ad1-b47b-4e36-948e-a591646ca014"
+      "index_name": "paris",
+      "download_url": "http://localhost:9069/v1/index/download/paris"
   }
   ```
 
@@ -173,7 +175,7 @@ curl --location 'http://localhost:12306/v1/search' \
 --data '{
     "query": "What is the location of Paris, France along the Seine river?",
     "top_k": 5,
-    "index": "index-a1f79ad1-b47b-4e36-948e-a591646ca014"
+    "index": "paris"
 }'
 ```
 
