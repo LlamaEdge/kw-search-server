@@ -92,12 +92,11 @@ async fn main() -> Result<(), ServerError> {
             info!(target: "stdout", "download_url_prefix: {}", &download_url_prefix);
             let download_url_prefix = Url::parse(&download_url_prefix).map_err(|e| {
                 ServerError::ArgumentError(format!(
-                    "Failed to parse `download_url_prefix` CLI option. Reason: {}",
-                    e
+                    "Failed to parse `download_url_prefix` CLI option. Reason: {e}",
                 ))
             })?;
             if let Err(e) = DOWNLOAD_URL_PREFIX.set(download_url_prefix) {
-                let err_msg = format!("Failed to set DOWNLOAD_URL_PREFIX: {}", e);
+                let err_msg = format!("Failed to set DOWNLOAD_URL_PREFIX: {e}");
 
                 error!(target: "stdout", "{}", &err_msg);
 
@@ -114,12 +113,11 @@ async fn main() -> Result<(), ServerError> {
 
                         let download_url_prefix = Url::parse(&ipv4_addr_str).map_err(|e| {
                             ServerError::Operation(format!(
-                                "Failed to parse `download_url_prefix` CLI option: {}",
-                                e
+                                "Failed to parse `download_url_prefix` CLI option: {e}",
                             ))
                         })?;
                         if let Err(e) = DOWNLOAD_URL_PREFIX.set(download_url_prefix) {
-                            let err_msg = format!("Failed to set SOCKET_ADDRESS: {}", e);
+                            let err_msg = format!("Failed to set SOCKET_ADDRESS: {e}");
 
                             error!(target: "stdout", "{}", &err_msg);
 
@@ -133,12 +131,11 @@ async fn main() -> Result<(), ServerError> {
 
                         let download_url_prefix = Url::parse(&ipv4_addr_str).map_err(|e| {
                             ServerError::Operation(format!(
-                                "Failed to parse `download_url_prefix` CLI option: {}",
-                                e
+                                "Failed to parse `download_url_prefix` CLI option: {e}",
                             ))
                         })?;
                         if let Err(e) = DOWNLOAD_URL_PREFIX.set(download_url_prefix) {
-                            let err_msg = format!("Failed to set SOCKET_ADDRESS: {}", e);
+                            let err_msg = format!("Failed to set SOCKET_ADDRESS: {e}");
 
                             error!(target: "stdout", "{}", &err_msg);
 
@@ -291,7 +288,7 @@ async fn process_multipart(mut multipart: Multipart) -> Json<IndexResponse> {
                     results.push(DocumentResult {
                         filename: None,
                         status: "failed".to_string(),
-                        error: Some(format!("Failed to read index field: {}", e)),
+                        error: Some(format!("Failed to read index field: {e}")),
                     });
                     continue;
                 }
@@ -502,7 +499,7 @@ async fn process_field_content(
             results.push(DocumentResult {
                 filename,
                 status: "failed".to_string(),
-                error: Some(format!("Failed to read file: {}", e)),
+                error: Some(format!("Failed to read file: {e}")),
             });
         }
     }
@@ -592,7 +589,7 @@ async fn process_json(request: IndexRequest) -> Json<IndexResponse> {
             results.push(DocumentResult {
                 filename,
                 status: "failed".to_string(),
-                error: Some(format!("Failed to add to index: {}", e)),
+                error: Some(format!("Failed to add to index: {e}")),
             });
             continue;
         }
@@ -719,7 +716,7 @@ async fn query_handler(Json(request): Json<QueryRequest>) -> Json<QueryResponse>
     let index = match Index::open_in_dir(&index_path) {
         Ok(index) => index,
         Err(e) => {
-            let err_msg = format!("Failed to open index: {}", e);
+            let err_msg = format!("Failed to open index: {e}");
 
             error!("{}", &err_msg);
 
@@ -755,7 +752,7 @@ async fn query_handler(Json(request): Json<QueryRequest>) -> Json<QueryResponse>
     let query = match query_parser.parse_query(&query_str) {
         Ok(q) => q,
         Err(e) => {
-            let err_msg = format!("Failed to parse query: {}", e);
+            let err_msg = format!("Failed to parse query: {e}");
 
             error!("{}", &err_msg);
 
@@ -771,7 +768,7 @@ async fn query_handler(Json(request): Json<QueryRequest>) -> Json<QueryResponse>
     let top_docs = match searcher.search(&query, &TopDocs::with_limit(request.top_k)) {
         Ok(docs) => docs,
         Err(e) => {
-            let err_msg = format!("Search failed: {}", e);
+            let err_msg = format!("Search failed: {e}");
 
             error!("{}", &err_msg);
 
@@ -832,7 +829,7 @@ async fn download_index_file_handler(
 
     // Check if index exists
     if !index_path.exists() {
-        let err_msg = format!("Index '{}' not found", index_name);
+        let err_msg = format!("Index '{index_name}' not found");
         error!(
             index_name = %index_name,
             path = %index_path.display(),
@@ -844,7 +841,7 @@ async fn download_index_file_handler(
     info!("Found index directory");
 
     // Prepare compression
-    let compressed_filename = format!("{}.tar.gz", index_name);
+    let compressed_filename = format!("{index_name}.tar.gz");
     let compressed_index_path = index_storage_dir.as_path().join(&compressed_filename);
 
     // check if compressed file exists
@@ -861,7 +858,7 @@ async fn download_index_file_handler(
                 file
             }
             Err(e) => {
-                let err_msg = format!("Failed to create compressed index file: {}", e);
+                let err_msg = format!("Failed to create compressed index file: {e}");
                 error!(
                     error = %e,
                     path = %compressed_index_path.display(),
@@ -874,7 +871,7 @@ async fn download_index_file_handler(
         // Compress directory
         let mut builder = tar::Builder::new(file);
         if let Err(e) = builder.append_dir_all(".", &index_path) {
-            let err_msg = format!("Failed to compress index directory: {}", e);
+            let err_msg = format!("Failed to compress index directory: {e}");
             error!(
                 error = %e,
                 source = %index_path.display(),
@@ -885,7 +882,7 @@ async fn download_index_file_handler(
         }
 
         if let Err(e) = builder.finish() {
-            let err_msg = format!("Failed to finalize index compression: {}", e);
+            let err_msg = format!("Failed to finalize index compression: {e}");
             error!(
                 error = %e,
                 path = %compressed_index_path.display(),
@@ -901,7 +898,7 @@ async fn download_index_file_handler(
     let mut file = match File::open(&compressed_index_path) {
         Ok(file) => file,
         Err(e) => {
-            let err_msg = format!("Failed to open the compressed file: {}", e);
+            let err_msg = format!("Failed to open the compressed file: {e}");
             error!(
                 error = %e,
                 path = %compressed_index_path.display(),
@@ -914,7 +911,7 @@ async fn download_index_file_handler(
     // Read file content
     let mut buffer: Vec<u8> = Vec::new();
     if let Err(e) = file.read_to_end(&mut buffer) {
-        let err_msg = format!("Failed to read the compressed file content: {}", e);
+        let err_msg = format!("Failed to read the compressed file content: {e}");
         error!(
             error = %e,
             path = %compressed_index_path.display(),
@@ -925,7 +922,7 @@ async fn download_index_file_handler(
 
     // Prepare response
     let content_type = "application/gzip";
-    let content_disposition = format!("attachment; filename=\"{}\"", compressed_filename);
+    let content_disposition = format!("attachment; filename=\"{compressed_filename}\"");
     let content_length = buffer.len();
     let body = axum::body::Body::from(buffer);
 
@@ -951,7 +948,7 @@ async fn download_index_file_handler(
             response
         }
         Err(e) => {
-            let err_msg = format!("Failed to build response: {}", e);
+            let err_msg = format!("Failed to build response: {e}");
             error!(
                 error = %e,
                 index_name = %index_name,
