@@ -257,9 +257,11 @@ async fn process_multipart(mut multipart: Multipart) -> Json<IndexResponse> {
     let mut results = Vec::new();
     let mut field_count = 0;
     let mut documents = Vec::new();
+    let mut index_name: Option<String> = None;
 
     while let Ok(Some(field)) = multipart.next_field().await {
         field_count += 1;
+        let field_name = field.name().unwrap_or("unknown").to_string();
         let filename = field.file_name().map(ToString::to_string);
 
         let content_type = field
@@ -269,26 +271,52 @@ async fn process_multipart(mut multipart: Multipart) -> Json<IndexResponse> {
 
         info!(
             field_number = field_count,
+            field_name = %field_name,
             filename = %filename.as_ref().unwrap_or(&"Unknown".to_string()),
             content_type = %content_type,
             "Processing field"
         );
 
-        if !is_valid_content_type(&content_type) {
-            warn!(
-                field_number = field_count,
-                filename = %filename.as_ref().unwrap_or(&"Unknown".to_string()),
-                content_type = %content_type,
-                "Unsupported file type"
-            );
-            results.push(DocumentResult {
-                filename,
-                status: "failed".to_string(),
-                error: Some(
-                    "Unsupported file type. Only .txt and .md files are allowed".to_string(),
-                ),
-            });
-            continue;
+        // Handle index field (text type)
+        if field_name == "index" {
+            match field.text().await {
+                Ok(text) => {
+                    info!("Processing index field");
+                    // Store index name for later use
+                    index_name = Some(text.trim_matches('"').to_string());
+                    continue;
+                }
+                Err(e) => {
+                    error!(error = %e, "Failed to read index field");
+                    results.push(DocumentResult {
+                        filename: None,
+                        status: "failed".to_string(),
+                        error: Some(format!("Failed to read index field: {}", e)),
+                    });
+                    continue;
+                }
+            }
+        }
+
+        let is_file = is_file_field(&field);
+        if is_file {
+            // Handle file fields
+            if !is_valid_content_type(&content_type) {
+                warn!(
+                    field_number = field_count,
+                    filename = %filename.as_ref().unwrap_or(&"Unknown".to_string()),
+                    content_type = %content_type,
+                    "Unsupported file type"
+                );
+                results.push(DocumentResult {
+                    filename,
+                    status: "failed".to_string(),
+                    error: Some(
+                        "Unsupported file type. Only .txt and .md files are allowed".to_string(),
+                    ),
+                });
+                continue;
+            }
         }
 
         process_field_content(&mut results, &mut documents, field, filename).await;
@@ -304,7 +332,7 @@ async fn process_multipart(mut multipart: Multipart) -> Json<IndexResponse> {
     // Create index directory
     info!("Starting index creation");
     let index_storage_dir = std::env::current_dir().unwrap().join(INDEX_STORAGE_DIR);
-    let index_name = format!("index-{}", uuid::Uuid::new_v4());
+    let index_name = index_name.unwrap_or_else(|| format!("index-{}", uuid::Uuid::new_v4()));
     let index_path = index_storage_dir.as_path().join(&index_name);
     if !index_path.exists() {
         debug!(path = %index_path.display(), "Creating index directory");
@@ -649,6 +677,11 @@ fn process_content(content: &str) -> Result<(), String> {
         return Err("Empty content is not allowed".to_string());
     }
     Ok(())
+}
+
+// Check if a field is a file or text
+fn is_file_field(field: &axum::extract::multipart::Field<'_>) -> bool {
+    field.file_name().is_some() || field.content_type().is_some()
 }
 
 // Validate content type
