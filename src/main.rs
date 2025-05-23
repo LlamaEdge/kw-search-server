@@ -519,7 +519,7 @@ async fn process_json(request: IndexRequest) -> Json<IndexResponse> {
     // Create index directory
     info!("Starting index creation");
     let index_storage_dir = std::env::current_dir().unwrap().join(INDEX_STORAGE_DIR);
-    let index_name = match request.name {
+    let index_name = match request.index {
         Some(name) => name,
         None => format!("index-{}", uuid::Uuid::new_v4()),
     };
@@ -809,7 +809,7 @@ async fn query_handler(Json(request): Json<QueryRequest>) -> Json<QueryResponse>
         hits.push(SearchHit {
             title: title_value,
             content: body_value,
-            score,
+            score: score as f64,
         });
     }
 
