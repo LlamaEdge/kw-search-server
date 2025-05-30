@@ -64,7 +64,6 @@ async fn main() -> Result<(), ServerError> {
 
     // Parse command line arguments
     let cli = Cli::parse();
-    info!("Server starting, command line arguments parsed");
 
     // Build application routes
     let app = Router::new()
@@ -74,14 +73,12 @@ async fn main() -> Result<(), ServerError> {
             "/v1/index/download/{index_name}",
             get(download_index_file_handler),
         );
-    info!("Route configuration completed");
 
     // Run the server
     let addr = match cli.socket_addr {
         Some(addr) => addr,
         None => SocketAddr::from(([0, 0, 0, 0], cli.port)),
     };
-    info!("Binding to address: {}", addr);
 
     // set DOWNLOAD_URL_PREFIX
     match cli.download_url_prefix {
